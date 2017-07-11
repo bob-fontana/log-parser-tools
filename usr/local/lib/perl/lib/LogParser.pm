@@ -1,5 +1,5 @@
 package LogParser;
-# LogParser.pm v1.4
+# LogParser.pm v1.5
 
 use strict;
 use warnings;

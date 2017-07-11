@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# text2bin.pl v1.4
+# text2bin.pl v1.5
 # vim: set ts=2 nowrap
 #
 # text2bin.pl
