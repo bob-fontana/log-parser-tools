@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-# tofascn.pl v1.5
+# tofascn.pl v1.6
 # vim: ts=2 nowrap
 #
 #
@@ -12,18 +12,23 @@ use strict;
 use warnings;
 use FindBin;
 use lib $FindBin::Bin . '/../lib/perl/lib';
-use LogParser qw(&cook);
+use Getopt::Long qw(GetOptions);
+use LogParser qw(&cook &clean);
 
+my $raw = "";
 # Check args
 
-if (@ARGV < 1) {
-	die "Usage: $0 <raw FASC-N>\n";
+GetOptions("--raw|r=s" => \$raw);
+
+if (length $raw == 0) {
+	die "Usage: $0 --raw=<raw fascn>\n";
 }
 
-my $length = length $ARGV[0];
-die "Invalid input length ($length)\n" if (length $ARGV[0] != 50);
+$raw = clean($raw);
+my $length = length $raw;
+die "Invalid input length ($length)\n" if (length $raw != 50);
 
-my $fascn = cook($ARGV[0]);
+my $fascn = cook($raw);
 
 $length = length $fascn;
 die "Invalid output length ($fascn)\n" if (length $fascn != 32);

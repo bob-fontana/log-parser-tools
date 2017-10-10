@@ -6,12 +6,15 @@ use warnings;
 use Exporter;
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK %EXPORT_TAGS);
 
-$VERSION     = 1.00;
+$VERSION     = 1.01;
 @ISA         = qw(Exporter);
-@EXPORT      = ();
-@EXPORT_OK   = qw(cook clean output_value tlvparse);
+@EXPORT      = qw($TRUE $FALSE);
+@EXPORT_OK   = qw(cook raw rawdelim clean output_value tlvparse);
 %EXPORT_TAGS = ( DEFAULT => [qw(&cook)],
-                 All     => [qw(&cook &clean &output_value &tlvparse)]);
+                 All     => [qw(&cook &raw &rawdelim &clean &output_value &tlvparse)]);
+
+our $TRUE = 1;
+our $FALSE = 0;
 
 #
 # Deconstructs a 200-bit raw FASC-N to cooked form.
@@ -129,6 +132,163 @@ sub tlvparse ($) {
 	}
 	shift @chars;
 	return ($tag, $len, @chars);
+}
+
+# Odd parity means set parity bit to 0 if odd number of bits, set 
+# parity bit to 1 if even number of bits.
+
+sub getParity($) {
+	my $n = shift;
+	my $retval = 0;
+	my $b = 0;
+	for ($n &= 0x0f, my $i = 0; $i < 4; $i++) {
+		if (($n & (1 << $i)) > 0) {
+			$b++;
+		}
+	}
+	$retval = (($b % 2) == 0) ? 1 : 0;
+	return $retval;
+}
+
+sub appendParity($) {
+	my $v = shift;
+	my $retval = 0;
+	$retval = (($v << 1) | getParity($v)) & 0x1f;
+	return $retval;
+}
+
+sub digitsWithParity($) {
+	my $digits = shift;
+	my @darray = split //, $digits;
+	my @rarray = ();
+
+	map { 
+		push @rarray, appendParity($_);
+	} @darray;
+
+	return @rarray;
+}
+
+sub appendLrc($$) {
+	my @bitctrs = (0, 0, 0, 0);
+	my $i = 0;
+	my $lrc = 0;
+	map {
+		for ($i = 4; $i >= 1; $i--) {
+			if (($_ & (1 << $i)) != 0) {
+				$bitctrs[$i - 1]++;
+			}
+		}
+	} @{$_[0]};
+
+	# Create a regular byte without the parity bit
+	#
+	# 7 = 11100
+
+	for ($i = 3; $i >= 0; $i--) {
+		$lrc |= ((($bitctrs[$i] % 2) == 1) ? (1 << $i) : 0);
+	}
+
+	$lrc = flipBits($lrc);
+	$lrc = appendParity($lrc);
+
+	push @{$_[0]}, $lrc;
+
+	my $val = 0;
+	for ($i = 4; $i >= 0; $i--) {
+		$val = ($lrc & (1 << $i)) ? 1 : 0;
+		push @{$_[1]}, $val;
+	}
+}
+
+#
+# Swaps bits so 0001 becomes 1000, etc.
+# 
+
+sub flipBits($) {
+	my $num = shift;
+	my $flipped = 0;
+	for (my $i = 0; $i < 4; $i++) {
+		if ($num & (1 << $i)) {
+			$flipped |= (1 << (3 - $i));
+		}
+	}
+	return $flipped;
+}
+
+sub raw($) {
+
+	my $cooked = shift;
+	my $ssent = 11;
+	my $fsep  = 13;
+	my $esent = 15;
+	
+	$ssent = appendParity($ssent);
+	$fsep  = appendParity($fsep);
+	$esent = appendParity($esent);
+	
+	my @bytes = ();
+	
+	# Start Sentinel
+	push @bytes, $ssent;
+	map { push @bytes, $_ } digitsWithParity(substr($cooked, 0, 4)); push @bytes, $fsep;
+	map { push @bytes, $_ } digitsWithParity(substr($cooked, 4, 4)); push @bytes, $fsep;
+	map { push @bytes, $_ } digitsWithParity(substr($cooked, 8, 6)); push @bytes, $fsep;
+	map { push @bytes, $_ } digitsWithParity(substr($cooked, 14, 1)); push @bytes, $fsep;
+	map { push @bytes, $_ } digitsWithParity(substr($cooked, 15, 1)); push @bytes, $fsep;
+	map { push @bytes, $_ } digitsWithParity(substr($cooked, 16, 10));
+	map { push @bytes, $_ } digitsWithParity(substr($cooked, 26, 1));
+	map { push @bytes, $_ } digitsWithParity(substr($cooked, 27, 4));
+	map { push @bytes, $_ } digitsWithParity(substr($cooked, 31, 1));
+	push @bytes, $esent;
+	
+	my $i;
+	my @bits = ();
+	my $val;
+	my $x = 0;
+	my $y = "";
+	map { 
+		$x = ((flipBits($_ >> 1)) << 1) | ($_ & 1);
+		$y = sprintf "%05b", $x;
+		map { push @bits, $_ } split //, $y;
+	} @bytes;
+
+	# LRC
+	appendLrc(\@bytes, \@bits);
+	my $fascn = "";
+	
+	for ($i = 0; $i <= 196; $i += 4) {
+		my $v = 0;
+		for ($v = 0, my $j = 0; $j < 4; $j++) {
+			$v = ($v << 1) | $bits[$i + $j];
+		}
+		$fascn .= sprintf "%1X", $v;
+	}
+
+	return $fascn;
+
+}
+
+#
+# Converts a readable FASC-N string to 200-bit raw delimited hex-ASCII formatted string
+#
+
+sub rawdelim($$$) {
+	my $fascn = shift;
+	my $delimiter = shift;
+	my $ucase = shift;
+	my $raw = raw($fascn);
+	my @digits = split //, $raw;
+	my $delimited = "";
+	my $i;
+	my $len = scalar @digits - 1;
+	for ($i = 0; $i < $len; $i += 2) {
+		$delimited .= ($digits[$i] . $digits[$i + 1]);
+		$delimited .= $delimiter if ($i + 2 <= $len);
+	}
+	$ucase = $FALSE if (!defined $ucase || $ucase != $TRUE);
+	my $retval = ($ucase == $TRUE) ? uc $delimited : lc $delimited;
+	return $retval;
 }
 
 1;
